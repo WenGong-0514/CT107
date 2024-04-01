@@ -43,6 +43,6 @@
 */
 具体使用方法可参照以下视频
 
-正在录制
+https://www.bilibili.com/video/BV1jj421R7mu/
 
 任何事宜可以通过邮箱stm32f103@qq.com联系我
