@@ -1,7 +1,7 @@
 /********************************** (C) COPYRIGHT *******************************
  * File Name          : iic.c
  * Author             : 0x49181f36
- * Version            : V0.0.2
+ * Version            : V1.0.2
  * Date               : 2024/03/29
  * Description        : iic driver.
  * Open Source License: GPL3.0
@@ -17,6 +17,7 @@
 #include "iic.h"
 
 #define DELAY_TIME	5
+
 
 //
 void IIC_Delay(unsigned char i)
@@ -109,21 +110,29 @@ void IIC_SendAck(bit ackbit)
 }
 
 #ifdef PCF8591_ADC
-unsigned char PCF8591_Adc(void) 
-{ 
-    unsigned char temp; 
+void PCF8591_Adc(unsigned char* ADC_Value) 
+{
+    static unsigned char ADC_Channel;
+    unsigned char temp;
+    switch(ADC_Channel)
+    {
+        case 0: temp = 3;break;
+        case 1: temp = 0;break;
+        case 2: temp = 1;break;
+        case 3: temp = 2;break;
+    }
     IIC_Start(); 
     IIC_SendByte(0x90); 
     IIC_WaitAck(); 
-    IIC_SendByte(0x43);
+    IIC_SendByte(0x40+ADC_Channel);
     IIC_WaitAck(); 
     IIC_Start(); 
     IIC_SendByte(0x91); 
     IIC_WaitAck(); 
-    temp = IIC_RecByte(); 
+    ADC_Value[temp] = IIC_RecByte(); 
     IIC_SendAck(1); 
     IIC_Stop(); 
-    return temp; 
+    ADC_Channel = ++ADC_Channel % 4;
 } 
 #endif 
 #ifdef PCF8591_DAC 
@@ -132,11 +141,11 @@ void PCF8591_Dac(unsigned char dat)
     IIC_Start(); 
     IIC_SendByte(0x90); 
     IIC_WaitAck(); 
-    IIC_SendByte(0x43); 
+    IIC_SendByte(0x40); 
     IIC_WaitAck(); 
     IIC_SendByte(dat); 
     IIC_WaitAck();
-    IIC_Stop(); 
+    IIC_Stop();
 } 
 #endif 
 

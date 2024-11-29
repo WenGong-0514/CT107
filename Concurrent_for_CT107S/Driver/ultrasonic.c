@@ -15,7 +15,7 @@
 sbit TX = P1^0;
 sbit RX = P1^1;
 
-unsigned int wave_buf;
+
 bit RX_Wait_FLAG;
 
 
@@ -34,7 +34,7 @@ void Wave_Recv(void)
 {
     unsigned char ucNum = 20;
 
-    if(RX_Wait_FLAG==1)wave_buf=9999;
+    if(RX_Wait_FLAG==1)wave=9999;
     
     while(ucNum--)
     {

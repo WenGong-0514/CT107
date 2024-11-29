@@ -13,7 +13,7 @@
 
 #include "STC15F2K60S2.h"
 
-extern unsigned int wave_buf;
+extern unsigned int wave;
 extern bit RX_Wait_FLAG;
 
 void Timer1Init(void);
