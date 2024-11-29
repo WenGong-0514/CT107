@@ -16,6 +16,28 @@
 #include "uart.h"
 #include "stdio.h"
 
+/*
+J2 2-4 1-3
+J3 P34与SIGNAL连接
+J5  矩阵或独立任意
+J6 ON
+J13 IO模式
+
+使用内部IRC IRC频率12MHz
+串口波特率4800
+
+按键 S4 切换界面
+
+界面0 EEPROM 0x00位置数值 显示1S时间
+界面1 DS1302时钟 上电默认23-59-50
+界面2 LED_Test 全部LED以0.1S为间隔闪烁
+界面3 PCF8591 PCF8591读取RB2电压值
+界面4 DS18B20 显示DS18B20温度最高精度数值
+界面5 超声波测距 显示超声波测距数值
+界面6 NE555 显示NE555输出频率数值
+界面7 BEEP_AND_Relays_Test 继电器和蜂鸣器以0.1S为间隔开关
+*/
+
 #define STC_DISPLAY //STC数码管调试接口开关
 
 unsigned char Key_Read(void);
@@ -38,6 +60,7 @@ void Timer1Init(void);//超声波计时
 //用户自定义定时器 单位ms 不严格时间 ±10ms
 #define User_TIM1 1000
 #define User_TIM2 100
+#define User_TIM3 66
 
 //PCA定时器周期中断 单位 us CCAP1是系统节拍定时器 CCAP2是显示定时器 请确保CCAP2数值小于CCAP1
 #define TIME_CCAP1 1000
@@ -82,6 +105,7 @@ unsigned char UART_Task;          //串口用
 //软件定时器在这里定义时间控制器 注意数据类型能够包括您定的时间
 unsigned int USER_TIM_1;
 unsigned char USER_TIM_2;
+unsigned char User_TIM_3;
 
 
 int main()
@@ -103,35 +127,95 @@ int main()
     at24C02_control = read;//开启一次AT24C02读
     while(1)
     {
-        //界面类型数码管逻辑
         switch(mode)
         {
-            case 0://界面0
+            case 0://界面0 AT24C02数据 0x00位置
             {
-                if(one_tag!=0){one_tag=0;}
+                 if(one_tag!=0){one_tag = 0;seg[0] = 14,seg[1] = 14; seg[2] = 37;seg[3] = 34;seg[4] = 34;}
+                 seg[5] = at24c02_read[1]/100;
+                 seg[6] = at24c02_read[1]/10%10;
+                 seg[7] = at24c02_read[1]%10;
             }
             break;
-            case 1://界面1
+            case 1://界面1 DS1302时钟
             {
-                if(one_tag!=1){one_tag=1;}
+                if(one_tag!=1){one_tag=1;seg[2] = 33;seg[5] = 33;b_and_r &= ~0x50;}
+                seg[0] = rtc[0]/10;
+                seg[1] = rtc[0]%10;
+                seg[3] = rtc[1]/10;
+                seg[4] = rtc[1]%10;
+                seg[6] = rtc[2]/10;
+                seg[7] = rtc[2]%10;
             }
             break;
-             case 2://界面2
+             case 2://界面2 LED_TEST
             {
-                if(one_tag!=2){one_tag=2;}
+                if(one_tag!=2){one_tag=2;seg[0] = 36; seg[1] = 14; seg[2] = 13;seg[3] = 34;seg[4]=34;seg[5]= 34; seg[6]=34;seg[7]=34;}
+                if(USER_TIM_2 > User_TIM2)
+                {
+                    USER_TIM_2 -= User_TIM2;
+                    led ^= 0xFF;
+                }
             }
             break;
-            case 3://界面3
+            case 3://界面3 ADC
             {
-                if(one_tag!=3){one_tag=3;}
+                if(one_tag!=3){one_tag=3;seg[0] = 10; seg[1] = 13; seg[2] = 12;seg[3] = 34;led &= ~0xFF;}
+                seg[0]=pcf8591[3]/100;
+                seg[1]=pcf8591[3]/10%10;
+                seg[2]=pcf8591[3]%10;
+                    
+                seg[5]=pcf8591[1]/100;
+                seg[6]=pcf8591[1]/10%10;
+                seg[7]=pcf8591[1]%10;
+            }
+            break;
+            case 4://界面4 DS18B20数字温度计
+            {
+                if(one_tag!=4){one_tag=4;seg[0] = 12;seg[1] = 34;}
+                seg[2]=ds18b20/100000%10;
+                seg[3]=ds18b20/10000%10+16;
+                seg[4]=ds18b20/1000%10;
+                seg[5]=ds18b20/100%10;
+                seg[6]=ds18b20/10%10;
+                seg[7]=ds18b20%10;
+            }
+            break;
+            case 5://界面5 超声波测距
+            {
+                if(one_tag!=5){one_tag=5;seg[0] = 12; seg[1] = 5; seg[2] = 11; seg[3] = 34;}
+                seg[4]=wave/1000;
+                seg[5]=wave/100%10;
+                seg[6]=wave/10%10;
+                seg[7]=wave%10;
+            }
+            break;
+            case 6://界面6 NE555频率测量
+            {
+                if(one_tag!=6){one_tag=6;seg[0] =35; seg[1] = 14; seg[2] = 34;}
+                seg[3]=ne555/10000;
+                seg[4]=ne555/1000%10;
+                seg[5]=ne555/100%10;
+                seg[6]=ne555/10%10;
+                seg[7]=ne555%10;
+            }
+            break;
+            case 7://界面7 BEEP_AND_Relays_TEST
+            {
+                if(one_tag!=7){one_tag=7;seg[0] = 11; seg[1] = 14; seg[2] = 14;seg[3] = 37;seg[4]=34;seg[5]= 34; seg[6]=34;seg[7]=34;}
+                if(USER_TIM_2 > User_TIM2)
+                {
+                    USER_TIM_2 -= User_TIM2;
+                    b_and_r ^= 0x50;
+                }
             }
             break;
         }
-        //其他逻辑
 
-        //按键逻辑
         if(key_down)//按键按下
         {
+          if(key_down==4)mode++;//按下的是S4按键
+          if(mode > 7)mode = 1;
           key_down =0;//防止连续触发
         }
         
@@ -139,10 +223,39 @@ int main()
         if(USER_TIM_1 > User_TIM1)
         {
             USER_TIM_1 -= User_TIM1;
+            if(mode == 0)//开机显示1SEEPROM数值
+            {
+                mode = 1;
+                at24c02_write[1] = at24c02_read[1]+1;//将读到的数据+1后写到准备写入的位置
+                at24C02_control = write;//进行一次AT24C02写操作
+            }
+            #ifndef STC_DISPLAY
+            sprintf(TX1_Buffer,"超声波:%dcm ADC:%d 时间:%d-%d-%d 蜂鸣器:%d 继电器:%d 温度:%d\r\n",wave,(unsigned int)pcf8591[0],(unsigned int)rtc[0],(unsigned int)rtc[1],(unsigned int)rtc[2],(unsigned int)b_and_r>>6&0x01,(unsigned int)b_and_r>>4&0x01,(unsigned int)(ds18b20/10000));
+            B_TX1_busy=0;//串口发送控制器 先"sprintf"将要发送的数据写入TX1_Buffer,然后给该位置0即可开始发送
+            #endif
         }
-        if(USER_TIM_2 >User_TIM2)
+        if(User_TIM_3 >User_TIM3)
         {
-            USER_TIM_2 -=User_TIM2;
+            User_TIM_3 -=User_TIM3;
+            #ifdef STC_DISPLAY//STC_ISP数码管同步
+            TX1_Buffer[0] = 0x37;
+            TX1_Buffer[1] = 0x53;
+            TX1_Buffer[2] = 0x45;
+            TX1_Buffer[3] = 0x47;
+            TX1_Buffer[4] = 0x43;
+            TX1_Buffer[5] = 0x00;
+            TX1_Buffer[6] = 0x00;
+            TX1_Buffer[7] = 0x00;
+            TX1_Buffer[8] = ~Code[seg[0]];
+            TX1_Buffer[9] = ~Code[seg[1]];
+            TX1_Buffer[10] = ~Code[seg[2]];
+            TX1_Buffer[11] = ~Code[seg[3]];
+            TX1_Buffer[12] = ~Code[seg[4]];
+            TX1_Buffer[13] = ~Code[seg[5]];
+            TX1_Buffer[14] = ~Code[seg[6]];
+            TX1_Buffer[15] = ~Code[seg[7]];
+            B_TX1_busy=0;
+            #endif
         }
         //关于软件定时器的设置 请查找"//软件定时器"即可到达位置 按照提示即可添加
         //关于串口接收的设置 请查找"//串口接收" 即可到达位置 按照以往格式即可添加
@@ -204,6 +317,23 @@ int main()
             ULTRASONIC_Task = 0;
             Wave_Recv();
         }
+        #ifndef STC_DISPLAY
+        //uart Send control
+        if(UART_Task == UART_Task_time && B_TX1_busy != 255)
+        {
+          UART_Task = 0;
+          if(TX1_Buffer[B_TX1_busy]!=0x00)//Non-empty
+          {
+            SBUF=TX1_Buffer[B_TX1_busy];//Send
+            B_TX1_busy++;
+          }
+          else//Send over
+          {
+            for(;B_TX1_busy>0;B_TX1_busy--)TX1_Buffer[B_TX1_busy]=0;//clean buf
+            B_TX1_busy=255;
+          }
+        }
+        #else
         //uart Send control
         if(UART_Task == UART_Task_time && B_TX1_busy != 255)
         {
@@ -220,11 +350,17 @@ int main()
             B_TX1_busy=255;
           }
         }
+        #endif
         
         //uart reception control//串口接收
         if(B_RX1_flag==255)
         {
             if(RX1_Buffer[0]=='O'&&RX1_Buffer[1]=='P'&&RX1_Buffer[2]=='E'&&RX1_Buffer[3]=='N'&&RX1_Buffer[4]==':'&&RX1_Buffer[5]=='R')b_and_r|=0x10;
+            else if(RX1_Buffer[0]=='O'&&RX1_Buffer[1]=='P'&&RX1_Buffer[2]=='E'&&RX1_Buffer[3]=='N'&&RX1_Buffer[4]==':'&&RX1_Buffer[5]=='B')b_and_r|=0x40;
+            else if(RX1_Buffer[0]=='C'&&RX1_Buffer[1]=='L'&&RX1_Buffer[2]=='O'&&RX1_Buffer[3]=='S'&&RX1_Buffer[4]=='E'&&RX1_Buffer[5]==':'&&RX1_Buffer[6]=='R')b_and_r&=~0x10;
+            else if(RX1_Buffer[0]=='C'&&RX1_Buffer[1]=='L'&&RX1_Buffer[2]=='O'&&RX1_Buffer[3]=='S'&&RX1_Buffer[4]=='E'&&RX1_Buffer[5]==':'&&RX1_Buffer[6]=='B')b_and_r&=~0x40;
+            else if(RX1_Buffer[0]=='L'&&RX1_Buffer[1]=='E'&&RX1_Buffer[2]=='D'&&RX1_Buffer[3]=='O'&&RX1_Buffer[4]=='P'&&RX1_Buffer[5]=='E'&&RX1_Buffer[6]=='N'&&RX1_Buffer[7]==':')led|=(0x01<<(RX1_Buffer[8]-0x30));
+            else if(RX1_Buffer[0]=='L'&&RX1_Buffer[1]=='E'&&RX1_Buffer[2]=='D'&&RX1_Buffer[3]=='C'&&RX1_Buffer[4]=='L'&&RX1_Buffer[5]=='O'&&RX1_Buffer[6]=='S'&&RX1_Buffer[7]=='E'&&RX1_Buffer[8]==':')led&=~(0x01<<(RX1_Buffer[9]-0x30));
             B_RX1_flag=0;
         }
     }
@@ -262,6 +398,7 @@ void CCP_IRQHandler(void) interrupt 7
         //软件定时器加在这里 为什么不停止++呢-是为了防止累计误差 所以在数值达到后 请将时间减去您定的时间 这样 累计误差即可消除
         USER_TIM_1++;
         USER_TIM_2++;
+        User_TIM_3++;
     }
     if(CCF2)//关于显示(高实时低阻塞)
     {
