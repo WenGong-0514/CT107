@@ -1,8 +1,8 @@
 /********************************** (C) COPYRIGHT *******************************
  * File Name          : main.c
  * Author             : 0x49181f36
- * Version            : V1.0.1
- * Date               : 2024/03/30
+ * Version            : V1.0.2
+ * Date               : 2024/11/29
  * Description        : Main program body.
  * Open Source License: GPL3.0
  * E-mail             : stm32f103@qq.com
@@ -16,28 +16,6 @@
 #include "uart.h"
 #include "stdio.h"
 
-/*
-J2 2-4 1-3
-J3 P34与SIGNAL连接
-J5  矩阵或独立任意
-J6 ON
-J13 IO模式
-
-使用内部IRC IRC频率12MHz
-串口波特率4800
-
-按键 S4 切换界面
-
-界面0 EEPROM 0x00位置数值 显示1S时间
-界面1 DS1302时钟 上电默认23-59-50
-界面2 LED_Test 全部LED以0.1S为间隔闪烁
-界面3 PCF8591 PCF8591读取RB2电压值
-界面4 DS18B20 显示DS18B20温度最高精度数值
-界面5 超声波测距 显示超声波测距数值
-界面6 NE555 显示NE555输出频率数值
-界面7 BEEP_AND_Relays_Test 继电器和蜂鸣器以0.1S为间隔开关
-*/
-
 #define STC_DISPLAY //STC数码管调试接口开关
 
 unsigned char Key_Read(void);
@@ -45,9 +23,13 @@ unsigned char Key_Read(void);
 void Timer0Init(void);//NE555计数
 void Timer1Init(void);//超声波计时
 
+#define idle 0
+#define read 1
+#define write 2
+
 //一下为模块时间控制 可以更改来调整模块调用速度
 #define RTC_Task_time 299
-#define PCF8591_Task_time 199
+#define PCF8591_Task_time 49
 #define DS18B20_Task_time 249
 #define NE555_Task_time 333
 #define ULTRASONIC_Task_time 199
@@ -56,7 +38,6 @@ void Timer1Init(void);//超声波计时
 //用户自定义定时器 单位ms 不严格时间 ±10ms
 #define User_TIM1 1000
 #define User_TIM2 100
-#define User_TIM3 66
 
 //PCA定时器周期中断 单位 us CCAP1是系统节拍定时器 CCAP2是显示定时器 请确保CCAP2数值小于CCAP1
 #define TIME_CCAP1 1000
@@ -67,40 +48,40 @@ unsigned int TIME_2 = TIME_CCAP2;
 unsigned char code Code[38]={0XC0,0XF9,0XA4,0XB0,0X99,0X92,0X82,0XF8,0X80,0X90,0X88,0X83,0XC6,0XA1,0X86,0X8E,0x40,0x79,0x24,0x30,0x19,0x12,0x02,0x78,0x00,0x10,0x08,0x03,0x46,0x21,0x06,0x3f,0x7F,0xBF,0xFF,0xAB,0xC7,0x8C};
 //                              0   1    2    3    4    5   6     7     8   9   A     B   C     D   E   F      0.   1.  2.  3.     4.   5.  6.    7.   8.  9.   A.    B.    C. D.   E.     F.   .   -   空   n     L    P
 
-//HAL硬件抽象层
-unsigned char led;
-unsigned char seg[8]={34,34,34,34,34,34,34,34};
-unsigned char key;
-unsigned char b_and_r;
-unsigned char Rtc[3] = {23, 59, 50};
-unsigned char PCF8591[2]={128,128};
-unsigned char at24c02[2]={0,0};
-unsigned long int ds18b20=220000;
-unsigned int NE555_Freq = 0;
-//按键使用 您可以使用 key_val key_down key_up 他们的作用就是字面意思
-unsigned char key_sanf_delay,key_old;
-unsigned char key_val,key_down,key_up;
+//硬件抽象
+unsigned char led;                              //LED显示
+unsigned char seg[8]={34,34,34,34,34,34,34,34}; //数码管显示
+unsigned char b_and_r;                          //蜂鸣器和继电器对应74HC573写入数据
+unsigned char rtc[3] = {23, 59, 50};            //DS1302时间数据
+unsigned char pcf8591[5]={0,0,0,0,128};         //PCF8591ADC内容以及DAC内容 [0]_右侧ADC接口 [1]_光敏电阻 [2]_LM324运放 [3]_电位器 [4]_DAC输出数据
+unsigned char at24c02_read[2]={0,0};            //读取AT24C02数据 [0]_地址 [1]_读出的内容放置在这里
+unsigned char at24c02_write[2]={0,0};           //写入AT24C02数据 [0]_地址 [1]_要写入的数值
+unsigned char at24C02_control = idle;           //AT24C02读取写入控制器 将其赋值为read 则将at24c02_read[0]地址里的内容写入到at24c02_read[1]变量中(操作一次) 将其赋值为write 则将at24c02_write[1]的内容写入到at24c02_write[0]的地址内(操作一次) 读取写入操作完成自动转换为idle
+unsigned long int ds18b20=220000;               //DS18B20温度
+unsigned int ne555;                             //NE555频率
+unsigned int wave;                              //超声波距离
+unsigned char key_val,key_down,key_up;          //按键 val为实时按键状态 down监控按键按下瞬间 up监控按键抬起瞬间
+
+
+unsigned char key_old;//按键旧值 无使用价值
 
 //用户层界面切换控制逻辑
 unsigned char mode=0;
 unsigned char one_tag=255;
 
 //模块控制使用 一般不需要更改
-unsigned char seg_count;//数码管扫描用
-unsigned char KEY_Task;//按键消抖用
-unsigned int  RTC_Task;//DS1302用
-unsigned char PCF8591_Task;//PCF8591用
-unsigned char DS18B20_Task;//DS18B20用
-unsigned int  NE555_Task;//NE555用
-unsigned char ULTRASONIC_Task;//超声波用
-unsigned char UART_Task;//串口用
+unsigned char SEG_Count;          //数码管扫描用
+unsigned char KEY_Task;           //按键消抖用
+unsigned int  RTC_Task;           //DS1302用
+unsigned char PCF8591_Task;       //PCF8591用
+unsigned char DS18B20_Task;       //DS18B20用
+unsigned int  NE555_Task;         //NE555用
+unsigned char ULTRASONIC_Task;    //超声波用
+unsigned char UART_Task;          //串口用
 
 //软件定时器在这里定义时间控制器 注意数据类型能够包括您定的时间
 unsigned int USER_TIM_1;
 unsigned char USER_TIM_2;
-unsigned char User_TIM_3;
-
-bit AT24C02_Control = 0;//你可以给这个置1来读写EEPROM 读写地址需要去原代码处更改 默认0x00位置  查找"//AT24C02"来找到原代码
 
 
 int main()
@@ -114,99 +95,43 @@ int main()
     P2 &= 0x1f;
 
     //set_ds18b20();
-    Set_RTC(Rtc);
+    Set_RTC(rtc);
     EA = 1;
     Timer1Init();
     Timer0Init();
     uart_init();
-    AT24C02_Control = 1;//开启一次AT24C02 既读又写
+    at24C02_control = read;//开启一次AT24C02读
     while(1)
     {
+        //界面类型数码管逻辑
         switch(mode)
         {
-            case 0://界面0 AT24C02数据 0x00位置
+            case 0://界面0
             {
-                 if(one_tag!=0){one_tag = 0;seg[0] = 14,seg[1] = 14; seg[2] = 37;seg[3] = 34;seg[4] = 34;}
-                 seg[5] = at24c02[0]/100;
-                 seg[6] = at24c02[0]/10%10;
-                 seg[7] = at24c02[0]%10;
+                if(one_tag!=0){one_tag=0;}
             }
             break;
-            case 1://界面1 DS1302时钟
+            case 1://界面1
             {
-                if(one_tag!=1){one_tag=1;seg[2] = 33;seg[5] = 33;b_and_r &= ~0x50;}
-                seg[0] = Rtc[0]/10;
-                seg[1] = Rtc[0]%10;
-                seg[3] = Rtc[1]/10;
-                seg[4] = Rtc[1]%10;
-                seg[6] = Rtc[2]/10;
-                seg[7] = Rtc[2]%10;
+                if(one_tag!=1){one_tag=1;}
             }
             break;
-             case 2://界面2 LED_TEST
+             case 2://界面2
             {
-                if(one_tag!=2){one_tag=2;seg[0] = 36; seg[1] = 14; seg[2] = 13;seg[3] = 34;seg[4]=34;seg[5]= 34; seg[6]=34;seg[7]=34;}
-                if(USER_TIM_2 > User_TIM2)
-                {
-                    USER_TIM_2 -= User_TIM2;
-                    led ^= 0xFF;
-                }
+                if(one_tag!=2){one_tag=2;}
             }
             break;
-            case 3://界面3 ADC
+            case 3://界面3
             {
-                if(one_tag!=3){one_tag=3;seg[0] = 10; seg[1] = 13; seg[2] = 12;seg[3] = 34;led &= ~0xFF;}
-                seg[5]=PCF8591[0]/100;
-                seg[6]=PCF8591[0]/10%10;
-                seg[7]=PCF8591[0]%10;
-            }
-            break;
-            case 4://界面4 DS18B20数字温度计
-            {
-                if(one_tag!=4){one_tag=4;seg[0] = 12;seg[1] = 34;}
-                seg[2]=ds18b20/100000%10;
-                seg[3]=ds18b20/10000%10+16;
-                seg[4]=ds18b20/1000%10;
-                seg[5]=ds18b20/100%10;
-                seg[6]=ds18b20/10%10;
-                seg[7]=ds18b20%10;
-            }
-            break;
-            case 5://界面5 超声波测距
-            {
-                if(one_tag!=5){one_tag=5;seg[0] = 12; seg[1] = 5; seg[2] = 11; seg[3] = 34;}
-                seg[4]=wave_buf/1000;
-                seg[5]=wave_buf/100%10;
-                seg[6]=wave_buf/10%10;
-                seg[7]=wave_buf%10;
-            }
-            break;
-            case 6://界面6 NE555频率测量
-            {
-                if(one_tag!=6){one_tag=6;seg[0] =35; seg[1] = 14; seg[2] = 34;}
-                seg[3]=NE555_Freq/10000;
-                seg[4]=NE555_Freq/1000%10;
-                seg[5]=NE555_Freq/100%10;
-                seg[6]=NE555_Freq/10%10;
-                seg[7]=NE555_Freq%10;
-            }
-            break;
-            case 7://界面7 BEEP_AND_Relays_TEST
-            {
-                if(one_tag!=7){one_tag=7;seg[0] = 11; seg[1] = 14; seg[2] = 14;seg[3] = 37;seg[4]=34;seg[5]= 34; seg[6]=34;seg[7]=34;}
-                if(USER_TIM_2 > User_TIM2)
-                {
-                    USER_TIM_2 -= User_TIM2;
-                    b_and_r ^= 0x50;
-                }
+                if(one_tag!=3){one_tag=3;}
             }
             break;
         }
+        //其他逻辑
 
+        //按键逻辑
         if(key_down)//按键按下
         {
-          if(key_down==4)mode++;//按下的是S4按键
-          if(mode > 7)mode = 1;
           key_down =0;//防止连续触发
         }
         
@@ -214,39 +139,10 @@ int main()
         if(USER_TIM_1 > User_TIM1)
         {
             USER_TIM_1 -= User_TIM1;
-            if(mode == 0)//开机显示1SEEPROM数值
-            {
-                mode = 1;
-                at24c02[1] = at24c02[0]+1;//将读到的数据+1后写到准备写入的位置
-                AT24C02_Control = 1;//再进行一次AT24C02操作
-            }
-            #ifndef STC_DISPLAY
-            sprintf(TX1_Buffer,"超声波:%dcm ADC:%d 时间:%d-%d-%d 蜂鸣器:%d 继电器:%d 温度:%d\r\n",wave_buf,(unsigned int)PCF8591[0],(unsigned int)Rtc[0],(unsigned int)Rtc[1],(unsigned int)Rtc[2],(unsigned int)b_and_r>>6&0x01,(unsigned int)b_and_r>>4&0x01,(unsigned int)(ds18b20/10000));
-            B_TX1_busy=0;//串口发送控制器 先"sprintf"将要发送的数据写入TX1_Buffer,然后给该位置0即可开始发送
-            #endif
         }
-        if(User_TIM_3 >User_TIM3)
+        if(USER_TIM_2 >User_TIM2)
         {
-            User_TIM_3 -=User_TIM3;
-            #ifdef STC_DISPLAY//STC_ISP数码管同步
-            TX1_Buffer[0] = 0x37;
-            TX1_Buffer[1] = 0x53;
-            TX1_Buffer[2] = 0x45;
-            TX1_Buffer[3] = 0x47;
-            TX1_Buffer[4] = 0x43;
-            TX1_Buffer[5] = 0x00;
-            TX1_Buffer[6] = 0x00;
-            TX1_Buffer[7] = 0x00;
-            TX1_Buffer[8] = ~Code[seg[0]];
-            TX1_Buffer[9] = ~Code[seg[1]];
-            TX1_Buffer[10] = ~Code[seg[2]];
-            TX1_Buffer[11] = ~Code[seg[3]];
-            TX1_Buffer[12] = ~Code[seg[4]];
-            TX1_Buffer[13] = ~Code[seg[5]];
-            TX1_Buffer[14] = ~Code[seg[6]];
-            TX1_Buffer[15] = ~Code[seg[7]];
-            B_TX1_busy=0;
-            #endif
+            USER_TIM_2 -=User_TIM2;
         }
         //关于软件定时器的设置 请查找"//软件定时器"即可到达位置 按照提示即可添加
         //关于串口接收的设置 请查找"//串口接收" 即可到达位置 按照以往格式即可添加
@@ -265,21 +161,23 @@ int main()
         if(RTC_Task == RTC_Task_time)
         {
             RTC_Task = 0;
-            Read_RTC(Rtc);
+            Read_RTC(rtc);
         }
         //pcf8591
         if(PCF8591_Task == PCF8591_Task_time)
         {
             PCF8591_Task = 0;
-            PCF8591[0]=PCF8591_Adc();
-            PCF8591_Dac(PCF8591[1]);
+            PCF8591_Adc(pcf8591);
+            PCF8591_Dac(pcf8591[4]);
         }
         //AT24C02
-        if(AT24C02_Control)
+        if(at24C02_control)
         {
-            AT24C02_Control = 0;
-            EEPROM_Read(&at24c02[0],0x00,1);//Change yourself
-            EEPROM_Write(&at24c02[1],0x00,1);//Change yourself
+            if (at24C02_control == read)
+            EEPROM_Read(&at24c02_read[1],at24c02_read[0],1);
+            else if (at24C02_control == write)
+            EEPROM_Write(&at24c02_write[1],at24c02_write[0],1);
+            at24C02_control = idle;
         }
         
         //ds18b20
@@ -294,7 +192,7 @@ int main()
         {
             NE555_Task = 0;
             TR0 = 0;
-            NE555_Freq = TH0*768+TL0*3;
+            ne555 = TH0*768+TL0*3;
             TH0 = 0;
             TL0 = 0;
             TR0 = 1;
@@ -306,23 +204,6 @@ int main()
             ULTRASONIC_Task = 0;
             Wave_Recv();
         }
-        #ifndef STC_DISPLAY
-        //uart Send control
-        if(UART_Task == UART_Task_time && B_TX1_busy != 255)
-        {
-          UART_Task = 0;
-          if(TX1_Buffer[B_TX1_busy]!=0x00)//Non-empty
-          {
-            SBUF=TX1_Buffer[B_TX1_busy];//Send
-            B_TX1_busy++;
-          }
-          else//Send over
-          {
-            for(;B_TX1_busy>0;B_TX1_busy--)TX1_Buffer[B_TX1_busy]=0;//clean buf
-            B_TX1_busy=255;
-          }
-        }
-        #else
         //uart Send control
         if(UART_Task == UART_Task_time && B_TX1_busy != 255)
         {
@@ -339,17 +220,11 @@ int main()
             B_TX1_busy=255;
           }
         }
-        #endif
         
         //uart reception control//串口接收
         if(B_RX1_flag==255)
         {
             if(RX1_Buffer[0]=='O'&&RX1_Buffer[1]=='P'&&RX1_Buffer[2]=='E'&&RX1_Buffer[3]=='N'&&RX1_Buffer[4]==':'&&RX1_Buffer[5]=='R')b_and_r|=0x10;
-            else if(RX1_Buffer[0]=='O'&&RX1_Buffer[1]=='P'&&RX1_Buffer[2]=='E'&&RX1_Buffer[3]=='N'&&RX1_Buffer[4]==':'&&RX1_Buffer[5]=='B')b_and_r|=0x40;
-            else if(RX1_Buffer[0]=='C'&&RX1_Buffer[1]=='L'&&RX1_Buffer[2]=='O'&&RX1_Buffer[3]=='S'&&RX1_Buffer[4]=='E'&&RX1_Buffer[5]==':'&&RX1_Buffer[6]=='R')b_and_r&=~0x10;
-            else if(RX1_Buffer[0]=='C'&&RX1_Buffer[1]=='L'&&RX1_Buffer[2]=='O'&&RX1_Buffer[3]=='S'&&RX1_Buffer[4]=='E'&&RX1_Buffer[5]==':'&&RX1_Buffer[6]=='B')b_and_r&=~0x40;
-            else if(RX1_Buffer[0]=='L'&&RX1_Buffer[1]=='E'&&RX1_Buffer[2]=='D'&&RX1_Buffer[3]=='O'&&RX1_Buffer[4]=='P'&&RX1_Buffer[5]=='E'&&RX1_Buffer[6]=='N'&&RX1_Buffer[7]==':')led|=(0x01<<(RX1_Buffer[8]-0x30));
-            else if(RX1_Buffer[0]=='L'&&RX1_Buffer[1]=='E'&&RX1_Buffer[2]=='D'&&RX1_Buffer[3]=='C'&&RX1_Buffer[4]=='L'&&RX1_Buffer[5]=='O'&&RX1_Buffer[6]=='S'&&RX1_Buffer[7]=='E'&&RX1_Buffer[8]==':')led&=~(0x01<<(RX1_Buffer[9]-0x30));
             B_RX1_flag=0;
         }
     }
@@ -366,7 +241,7 @@ void CCP_IRQHandler(void) interrupt 7
             if(TF1)TF1 = 0;
             else
             {
-                 wave_buf = (int)((TH1<<8)+TL1)*0.017;
+                 wave = (int)((TH1<<8)+TL1)*0.017;
                  RX_Wait_FLAG=0;
             }
         }
@@ -387,7 +262,6 @@ void CCP_IRQHandler(void) interrupt 7
         //软件定时器加在这里 为什么不停止++呢-是为了防止累计误差 所以在数值达到后 请将时间减去您定的时间 这样 累计误差即可消除
         USER_TIM_1++;
         USER_TIM_2++;
-        User_TIM_3++;
     }
     if(CCF2)//关于显示(高实时低阻塞)
     {
@@ -407,15 +281,15 @@ void CCP_IRQHandler(void) interrupt 7
         P2&=0x1f;
         P2|=0xE0;
         P2&=0x1f;
-        P0=1<<seg_count%8;
+        P0=1<<SEG_Count%8;
         P2&=0x1f;
         P2|=0xC0;
         P2&=0x1f;
-        P0=Code[seg[seg_count%8]];
+        P0=Code[seg[SEG_Count%8]];
         P2&=0x1f;
         P2|=0xE0;
         P2&=0x1f;
-        seg_count++;
+        SEG_Count++;
         
         //bar
         P0 = b_and_r;
