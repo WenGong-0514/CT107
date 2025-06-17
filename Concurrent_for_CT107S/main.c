@@ -1,8 +1,8 @@
 /********************************** (C) COPYRIGHT *******************************
  * File Name          : main.c
  * Author             : 0x49181f36
- * Version            : V1.0.2
- * Date               : 2024/11/29
+ * Version            : V1.0.3
+ * Date               : 2024/06/16
  * Description        : Main program body.
  * Open Source License: GPL3.0
  * E-mail             : stm32f103@qq.com
@@ -49,6 +49,15 @@ void Timer1Init(void);//超声波计时
 #define read 1
 #define write 2
 
+//串口发送和接收缓冲区
+#define	TX1_Lenth	70
+#define	RX1_Lenth	20
+xdata char TX1_Buffer[TX1_Lenth] = 0;	//发送缓冲
+xdata char RX1_Buffer[RX1_Lenth] = 0;	//接收缓冲
+//串口发送与接收控制器
+unsigned char  TX_Con;		//发送控制
+unsigned char  RX1_Con = 0;//!255表示正在接收数据 255接收完成请处理
+
 //一下为模块时间控制 可以更改来调整模块调用速度
 #define RTC_Task_time 299
 #define PCF8591_Task_time 49
@@ -65,6 +74,7 @@ void Timer1Init(void);//超声波计时
 //PCA定时器周期中断 单位 us CCAP1是系统节拍定时器 CCAP2是显示定时器 请确保CCAP2数值小于CCAP1
 #define TIME_CCAP1 1000
 #define TIME_CCAP2 666
+#define UART_RX_IDLE_TIME 3                     //串口接收空闲时间 单位ms
 unsigned int TIME_1 = TIME_CCAP1;
 unsigned int TIME_2 = TIME_CCAP2;
 //字库
@@ -100,7 +110,7 @@ unsigned char PCF8591_Task;       //PCF8591用
 unsigned char DS18B20_Task;       //DS18B20用
 unsigned int  NE555_Task;         //NE555用
 unsigned char ULTRASONIC_Task;    //超声波用
-unsigned char UART_Task;          //串口用
+unsigned char UART_Idle_Time;     //串口用
 
 //软件定时器在这里定义时间控制器 注意数据类型能够包括您定的时间
 unsigned int USER_TIM_1;
@@ -231,7 +241,8 @@ int main()
             }
             #ifndef STC_DISPLAY
             sprintf(TX1_Buffer,"超声波:%dcm ADC:%d 时间:%d-%d-%d 蜂鸣器:%d 继电器:%d 温度:%d\r\n",wave,(unsigned int)pcf8591[0],(unsigned int)rtc[0],(unsigned int)rtc[1],(unsigned int)rtc[2],(unsigned int)b_and_r>>6&0x01,(unsigned int)b_and_r>>4&0x01,(unsigned int)(ds18b20/10000));
-            B_TX1_busy=0;//串口发送控制器 先"sprintf"将要发送的数据写入TX1_Buffer,然后给该位置0即可开始发送
+            SBUF = TX1_Buffer[0];
+            TX_Con=1;//串口发送控制器 先"sprintf"将要发送的数据写入TX1_Buffer,然后给该位置0即可开始发送
             #endif
         }
         if(User_TIM_3 >User_TIM3)
@@ -254,7 +265,8 @@ int main()
             TX1_Buffer[13] = ~Code[seg[5]];
             TX1_Buffer[14] = ~Code[seg[6]];
             TX1_Buffer[15] = ~Code[seg[7]];
-            B_TX1_busy=0;
+            SBUF = TX1_Buffer[0];
+            TX_Con=1;
             #endif
         }
         //关于软件定时器的设置 请查找"//软件定时器"即可到达位置 按照提示即可添加
@@ -317,52 +329,61 @@ int main()
             ULTRASONIC_Task = 0;
             Wave_Recv();
         }
-        #ifndef STC_DISPLAY
-        //uart Send control
-        if(UART_Task == UART_Task_time && B_TX1_busy != 255)
+        if(RX1_Con && UART_Idle_Time >= UART_RX_IDLE_TIME)
         {
-          UART_Task = 0;
-          if(TX1_Buffer[B_TX1_busy]!=0x00)//Non-empty
-          {
-            SBUF=TX1_Buffer[B_TX1_busy];//Send
-            B_TX1_busy++;
-          }
-          else//Send over
-          {
-            for(;B_TX1_busy>0;B_TX1_busy--)TX1_Buffer[B_TX1_busy]=0;//clean buf
-            B_TX1_busy=255;
-          }
-        }
-        #else
-        //uart Send control
-        if(UART_Task == UART_Task_time && B_TX1_busy != 255)
-        {
-          UART_Task = 0;
-          if(TX1_Buffer[B_TX1_busy]!=0x00 || B_TX1_busy < 16)//Non-empty
-          {
-            SBUF=TX1_Buffer[B_TX1_busy];//Send
-            B_TX1_busy++;
-          }
-          else//Send over
-          {
-            for(;B_TX1_busy>0;B_TX1_busy--)TX1_Buffer[B_TX1_busy]=0;//clean buf
-              SBUF= 0x00;
-            B_TX1_busy=255;
-          }
-        }
-        #endif
-        
-        //uart reception control//串口接收
-        if(B_RX1_flag==255)
-        {
+            //串口接收空闲时间大于设定值 且接收缓冲区有数据，则处理接收到的数据
+            //RX1_Buffer中为串口接收数据,RX1_Con为接收数据长度
             if(RX1_Buffer[0]=='O'&&RX1_Buffer[1]=='P'&&RX1_Buffer[2]=='E'&&RX1_Buffer[3]=='N'&&RX1_Buffer[4]==':'&&RX1_Buffer[5]=='R')b_and_r|=0x10;
             else if(RX1_Buffer[0]=='O'&&RX1_Buffer[1]=='P'&&RX1_Buffer[2]=='E'&&RX1_Buffer[3]=='N'&&RX1_Buffer[4]==':'&&RX1_Buffer[5]=='B')b_and_r|=0x40;
             else if(RX1_Buffer[0]=='C'&&RX1_Buffer[1]=='L'&&RX1_Buffer[2]=='O'&&RX1_Buffer[3]=='S'&&RX1_Buffer[4]=='E'&&RX1_Buffer[5]==':'&&RX1_Buffer[6]=='R')b_and_r&=~0x10;
             else if(RX1_Buffer[0]=='C'&&RX1_Buffer[1]=='L'&&RX1_Buffer[2]=='O'&&RX1_Buffer[3]=='S'&&RX1_Buffer[4]=='E'&&RX1_Buffer[5]==':'&&RX1_Buffer[6]=='B')b_and_r&=~0x40;
             else if(RX1_Buffer[0]=='L'&&RX1_Buffer[1]=='E'&&RX1_Buffer[2]=='D'&&RX1_Buffer[3]=='O'&&RX1_Buffer[4]=='P'&&RX1_Buffer[5]=='E'&&RX1_Buffer[6]=='N'&&RX1_Buffer[7]==':')led|=(0x01<<(RX1_Buffer[8]-0x30));
             else if(RX1_Buffer[0]=='L'&&RX1_Buffer[1]=='E'&&RX1_Buffer[2]=='D'&&RX1_Buffer[3]=='C'&&RX1_Buffer[4]=='L'&&RX1_Buffer[5]=='O'&&RX1_Buffer[6]=='S'&&RX1_Buffer[7]=='E'&&RX1_Buffer[8]==':')led&=~(0x01<<(RX1_Buffer[9]-0x30));
-            B_RX1_flag=0;
+            else if(RX1_Buffer[0]=='M'&&RX1_Buffer[1]=='O'&&RX1_Buffer[2]=='D'&&RX1_Buffer[3]=='E'&&RX1_Buffer[4]==':')mode = RX1_Buffer[5]-48;
+            for(;RX1_Con>0;RX1_Con--)
+                RX1_Buffer[RX1_Con]=0;//清空接收缓冲区并置标志位为0
+            UART_Idle_Time = 0; //串口接收空闲时间清零
         }
+    }
+}
+
+
+//中断函数
+void uart_0(void) interrupt 4
+{
+    if(RI)
+    {
+        RI = 0;
+        RX1_Buffer[RX1_Con]=SBUF;
+        RX1_Con++;
+        UART_Idle_Time = 0; //串口接收空闲时间清零
+    }
+    if(TI)
+    {
+        TI = 0;
+        #ifndef STC_DISPLAY
+        if(TX1_Buffer[TX_Con]!=0x00)//Non-empty
+        {
+            SBUF=TX1_Buffer[TX_Con];//Send
+            TX_Con++;
+        }
+        else//Send over
+        {
+            for(;TX_Con>0;TX_Con--)
+                TX1_Buffer[TX_Con]=0;//clean buf
+        }
+        #else
+        if(TX1_Buffer[TX_Con]!=0x00 || TX_Con < 16)//Non-empty
+        {
+            SBUF=TX1_Buffer[TX_Con];//Send
+            TX_Con++;
+        }
+        else//Send over
+        {
+            for(;TX_Con>0;TX_Con--)
+                TX1_Buffer[TX_Con]=0;//clean buf
+        }
+        #endif
     }
 }
 
@@ -394,7 +415,7 @@ void CCP_IRQHandler(void) interrupt 7
         if(DS18B20_Task < DS18B20_Task_time) DS18B20_Task++;
         if(NE555_Task < NE555_Task_time) NE555_Task++;
         if(ULTRASONIC_Task < ULTRASONIC_Task_time) ULTRASONIC_Task++;
-        if(UART_Task < UART_Task_time) UART_Task++;
+        if(UART_Idle_Time < UART_RX_IDLE_TIME && RX1_Con) UART_Idle_Time++;
         //软件定时器加在这里 为什么不停止++呢-是为了防止累计误差 所以在数值达到后 请将时间减去您定的时间 这样 累计误差即可消除
         USER_TIM_1++;
         USER_TIM_2++;
